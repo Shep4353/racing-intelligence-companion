@@ -210,8 +210,15 @@ iracing.on('Telemetry', (telemetry) => {
     data: telemetryData
   });
 
+  // Initialize fuel level on first telemetry (BEFORE lap processing)
+  if (lastFuelLevel === 0 && values.FuelLevel > 0) {
+    lastFuelLevel = values.FuelLevel;
+    console.log(`Initial fuel level: ${lastFuelLevel.toFixed(2)}L`);
+  }
+
   // Process lap completion
-  if (values.LapCompleted > lastLapNumber) {
+  if (values.LapCompleted > lastLapNumber && lastLapNumber > 0) {
+    // Only process if we have a previous lap (skip lap 0 -> lap 1 transition)
     const fuelUsed = lastFuelLevel - values.FuelLevel;
 
     const lapData = {
@@ -228,9 +235,6 @@ iracing.on('Telemetry', (telemetry) => {
     };
 
     laps.push(lapData);
-    lastLapNumber = values.LapCompleted;
-    lastFuelLevel = values.FuelLevel;
-
     console.log(`Lap ${lapData.lapNumber}: ${lapData.lapTime.toFixed(3)}s - Fuel: ${lapData.fuelUsed.toFixed(2)}L`);
 
     broadcast({
@@ -239,8 +243,9 @@ iracing.on('Telemetry', (telemetry) => {
     });
   }
 
-  // Initialize fuel level on first telemetry
-  if (lastFuelLevel === 0 && values.FuelLevel > 0) {
+  // Update trackers for next lap
+  if (values.LapCompleted > lastLapNumber) {
+    lastLapNumber = values.LapCompleted;
     lastFuelLevel = values.FuelLevel;
   }
 
