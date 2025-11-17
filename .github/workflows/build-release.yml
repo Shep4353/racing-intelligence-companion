@@ -22,8 +22,12 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Setup Windows SDK
+        run: |
+          choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64" -y
+
       - name: Install dependencies
-        run: npm install
+        run: npm ci --if-present || npm install
 
       - name: Build executable
         run: npm run build
