@@ -1,0 +1,78 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build executable
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RacingIntelligenceCompanion
+          path: dist/RacingIntelligenceCompanion.exe
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/RacingIntelligenceCompanion.exe
+          body: |
+            # Racing Intelligence Companion ${{ github.ref_name }}
+
+            **Download and run - no installation needed!**
+
+            ## 🎯 What's This?
+            The Racing Intelligence Companion streams live iRacing telemetry to the OPR Intelligence web application.
+
+            ## 📦 Installation
+            1. Download `RacingIntelligenceCompanion.exe` below
+            2. Double-click to run
+            3. Launch iRacing and join a session
+            4. Open the Live Calculator in OPR Intelligence
+            5. See real-time fuel data, lap times, and pit strategy!
+
+            ## ✨ Features
+            - Real-time fuel levels and consumption
+            - Live lap timing
+            - Automatic pit stop predictions
+            - Lap history tracking
+            - Zero configuration required
+
+            ## 🖥️ Requirements
+            - Windows (64-bit)
+            - iRacing subscription
+            - OPR Intelligence account
+
+            ## 🔒 Security Note
+            Windows may show a SmartScreen warning because this app is unsigned. Click "More info" → "Run anyway" to proceed. The app is safe and open source.
+
+            ## 📖 Documentation
+            See the [README](https://github.com/${{ github.repository }}/blob/main/README.md) for more details.
+
+            ---
+
+            🏁 **Happy Racing!**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

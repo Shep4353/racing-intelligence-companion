@@ -1,0 +1,36 @@
+{
+  "name": "racing-intelligence-companion",
+  "version": "1.0.0",
+  "description": "Racing Intelligence Companion - Stream iRacing telemetry data to OPR Intelligence web app",
+  "main": "src/index.js",
+  "bin": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "build": "pkg . --targets node18-win-x64 --output dist/RacingIntelligenceCompanion.exe"
+  },
+  "keywords": [
+    "iracing",
+    "telemetry",
+    "websocket"
+  ],
+  "author": "",
+  "license": "ISC",
+  "pkg": {
+    "assets": [
+      "node_modules/node-irsdk/**/*"
+    ],
+    "targets": [
+      "node18-win-x64"
+    ],
+    "outputPath": "dist"
+  },
+  "dependencies": {
+    "node-irsdk": "^2.1.6",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7",
+    "pkg": "^5.8.1"
+  }
+}
