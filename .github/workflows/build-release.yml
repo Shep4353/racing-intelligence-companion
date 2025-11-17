@@ -26,23 +26,41 @@ jobs:
         run: |
           choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64" -y
 
-      - name: Install dependencies
-        run: npm ci --if-present || npm install
+      - name: Install dependencies (ignore node-irsdk failure)
+        continue-on-error: true
+        run: npm install --ignore-scripts
 
-      - name: Fix node-irsdk BOM issue
+      - name: Install non-native dependencies
+        run: npm install ws pkg
+
+      - name: Download and fix node-irsdk
         shell: pwsh
         run: |
-          $bindingPath = "node_modules\node-irsdk\binding.gyp"
-          if (Test-Path $bindingPath) {
-            $content = Get-Content $bindingPath -Raw
-            $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-            [System.IO.File]::WriteAllText($bindingPath, $content, $utf8NoBom)
-            Write-Host "Fixed BOM in binding.gyp"
-          }
+          # Download node-irsdk source
+          npm pack node-irsdk@2.1.6
 
-      - name: Rebuild node-irsdk
+          # Extract
+          tar -xf node-irsdk-2.1.6.tgz
+
+          # Fix BOM in binding.gyp
+          $bindingPath = "package\binding.gyp"
+          $content = Get-Content $bindingPath -Raw
+          $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+          [System.IO.File]::WriteAllText($bindingPath, $content, $utf8NoBom)
+          Write-Host "Fixed BOM in binding.gyp"
+
+          # Move to node_modules
+          if (!(Test-Path "node_modules")) { New-Item -ItemType Directory -Path "node_modules" }
+          if (Test-Path "node_modules\node-irsdk") { Remove-Item -Recurse -Force "node_modules\node-irsdk" }
+          Move-Item "package" "node_modules\node-irsdk"
+
+          # Clean up
+          Remove-Item "node-irsdk-2.1.6.tgz"
+
+      - name: Build node-irsdk
         run: |
           cd node_modules\node-irsdk
+          npm install --ignore-scripts
           node-gyp rebuild
 
       - name: Build executable
