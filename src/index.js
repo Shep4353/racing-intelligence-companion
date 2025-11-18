@@ -260,7 +260,7 @@ function processTelemetry(telemetry) {
 setInterval(() => {
   try {
     const sessionData = sdk.getSessionData();
-    const telemetryData = sdk.getTelemetryData();
+    const telemetryData = sdk.getTelemetry();
 
     // Check connection status
     const wasConnected = isConnected;
