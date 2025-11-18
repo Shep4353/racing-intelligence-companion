@@ -67,7 +67,7 @@ iRacing (Shared Memory)
   ↓
 node-irsdk
   ↓
-WebSocket Server (port 8080)
+WebSocket Server (port 8081)
   ↓
 OPR Intelligence Web App
 ```
@@ -87,7 +87,7 @@ The companion app:
 
 ### WebSocket API
 
-Connect to `ws://localhost:8080`
+Connect to `ws://localhost:8081`
 
 **Message Types:**
 - `connection_status` - Initial state
@@ -100,7 +100,7 @@ Connect to `ws://localhost:8080`
 
 **Example:**
 ```javascript
-const ws = new WebSocket('ws://localhost:8080');
+const ws = new WebSocket('ws://localhost:8081');
 ws.onmessage = (event) => {
   const message = JSON.parse(event.data);
   console.log(message.type, message.data);

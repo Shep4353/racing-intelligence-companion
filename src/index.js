@@ -2,14 +2,15 @@
 
 const WebSocket = require('ws');
 const { NativeSDK } = require('@irsdk-node/native');
+const YAML = require('yaml');
 
 console.log('========================================');
-console.log('Racing Intelligence Companion v1.0.0');
+console.log('Racing Intelligence Companion v1.0.1');
 console.log('========================================');
 console.log('');
 
 // Configuration
-const WS_PORT = 8080;
+const WS_PORT = process.env.WS_PORT || 8081; // Use 8081 to avoid conflict with Vite dev server
 const TELEMETRY_UPDATE_INTERVAL = 100; // 100ms = 10 Hz
 
 // Initialize WebSocket server
@@ -17,7 +18,19 @@ const wss = new WebSocket.Server({ port: WS_PORT });
 console.log(`WebSocket server running on port ${WS_PORT}`);
 
 // Initialize iRacing SDK
-const sdk = new NativeSDK();
+let sdk;
+try {
+  sdk = new NativeSDK();
+  console.log('✓ iRacing SDK initialized successfully');
+
+  // Start the SDK (required before reading data)
+  // This will return false if iRacing is not running, but we poll for it
+  sdk.startSDK();
+} catch (error) {
+  console.error('✗ Failed to initialize iRacing SDK:', error.message);
+  console.log('Make sure iRacing is installed and running');
+  process.exit(1);
+}
 
 // Track connected clients
 const clients = new Set();
@@ -93,15 +106,31 @@ function parseSessionTime(timeString) {
 function processSessionData(sessionData) {
   if (!sessionData) return;
 
-  const weekendInfo = sessionData.WeekendInfo || {};
-  const sessionInfo = sessionData.SessionInfo?.Sessions?.[0] || {};
+  // Session data comes as a YAML string, need to parse it
+  let parsedData;
+  try {
+    // If sessionData is a string or buffer, parse it as YAML
+    if (typeof sessionData === 'string') {
+      parsedData = YAML.parse(sessionData);
+    } else if (Buffer.isBuffer(sessionData)) {
+      parsedData = YAML.parse(sessionData.toString());
+    } else {
+      parsedData = sessionData;
+    }
+  } catch (error) {
+    console.error('Failed to parse session data:', error.message);
+    return;
+  }
+
+  const weekendInfo = parsedData.WeekendInfo || {};
+  const sessionInfo = parsedData.SessionInfo?.Sessions?.[0] || {};
 
   const session = {
     sessionId: weekendInfo.SessionID || 0,
     subsessionId: weekendInfo.SubSessionID || null,
     trackName: weekendInfo.TrackDisplayName || weekendInfo.TrackName || 'Unknown',
     trackConfig: weekendInfo.TrackConfigName || null,
-    carName: sessionData.DriverInfo?.Drivers?.[0]?.CarScreenName || 'Unknown',
+    carName: parsedData.DriverInfo?.Drivers?.[0]?.CarScreenName || 'Unknown',
     sessionType: sessionInfo.SessionType || 'Unknown',
     sessionLaps: sessionInfo.SessionLaps === 'unlimited' ? null : parseInt(sessionInfo.SessionLaps) || null,
     sessionTimeSeconds: parseSessionTime(sessionInfo.SessionTime),
@@ -129,46 +158,110 @@ function processSessionData(sessionData) {
   }
 }
 
+// Helper to extract value from telemetry (SDK returns variable objects)
+function getValue(data) {
+  if (!data) return 0;
+
+  // If it's a telemetry variable object, extract the value property
+  if (typeof data === 'object' && 'value' in data) {
+    const val = data.value;
+
+    // Value is an ArrayBuffer - need to convert based on varType
+    if (val instanceof ArrayBuffer || ArrayBuffer.isView(val)) {
+      const varType = data.varType;
+      const buffer = val instanceof ArrayBuffer ? val : val.buffer;
+      const view = new DataView(buffer);
+
+      // Check if buffer has data (some telemetry values may be empty)
+      if (buffer.byteLength === 0) {
+        return 0;
+      }
+
+      // varType: 0=char, 1=bool, 2=int, 3=bitfield, 4=float, 5=double
+      try {
+        switch (varType) {
+          case 0: // char
+            return view.getInt8(0);
+          case 1: // bool
+            return view.getInt32(0, true);
+          case 2: // int
+            return view.getInt32(0, true);
+          case 3: // bitfield
+            return view.getUint32(0, true);
+          case 4: // float
+            return view.getFloat32(0, true);
+          case 5: // double
+            return view.getFloat64(0, true);
+          default:
+            return 0;
+        }
+      } catch (err) {
+        // Silently return 0 for empty/invalid buffers
+        return 0;
+      }
+    }
+
+    // Value might be a regular array, get first element
+    if (Array.isArray(val)) return val[0] || 0;
+    return val || 0;
+  }
+
+  // If it's already an array, get first element
+  if (Array.isArray(data)) return data[0] || 0;
+
+  // Otherwise return as-is
+  return data || 0;
+}
+
 // Process telemetry data
 function processTelemetry(telemetry) {
   if (!currentSession || !isConnected || !telemetry) return;
 
+  // Debug: Check telemetry structure (log once)
+  if (!processTelemetry.logged) {
+    console.log('Telemetry type:', typeof telemetry);
+    console.log('Telemetry keys sample:', Object.keys(telemetry).slice(0, 10));
+    console.log('FuelLevel sample:', telemetry.FuelLevel);
+    console.log('Lap sample:', telemetry.Lap);
+    processTelemetry.logged = true;
+  }
+
   const telemetryData = {
     // Timing
-    sessionTime: telemetry.SessionTime || 0,
-    sessionTimeRemain: telemetry.SessionTimeRemain || 0,
+    sessionTime: getValue(telemetry.SessionTime),
+    sessionTimeRemain: getValue(telemetry.SessionTimeRemain),
 
     // Lap data
-    lap: telemetry.Lap || 0,
-    lapCompleted: telemetry.LapCompleted || 0,
-    lapDistPct: telemetry.LapDistPct || 0,
+    lap: getValue(telemetry.Lap),
+    lapCompleted: getValue(telemetry.LapCompleted),
+    lapDistPct: getValue(telemetry.LapDistPct),
 
     // Lap times
-    lapCurrentTime: telemetry.LapCurrentLapTime || 0,
-    lapLastTime: telemetry.LapLastLapTime || 0,
-    lapBestTime: telemetry.LapBestLapTime || 0,
+    lapCurrentTime: getValue(telemetry.LapCurrentLapTime),
+    lapLastTime: getValue(telemetry.LapLastLapTime),
+    lapBestTime: getValue(telemetry.LapBestLapTime),
 
     // Fuel
-    fuelLevel: telemetry.FuelLevel || 0,
-    fuelLevelPct: telemetry.FuelLevelPct || 0,
-    fuelUsePerHour: telemetry.FuelUsePerHour || 0,
+    fuelLevel: getValue(telemetry.FuelLevel),
+    fuelLevelPct: getValue(telemetry.FuelLevelPct),
+    fuelUsePerHour: getValue(telemetry.FuelUsePerHour),
 
     // Pit status
-    onPitRoad: telemetry.OnPitRoad || false,
-    pitstopActive: telemetry.PitstopActive || false,
+    onPitRoad: getValue(telemetry.OnPitRoad) === 1,
+    pitstopActive: getValue(telemetry.PitstopActive) === 1,
 
     // Position
-    carIdx: telemetry.PlayerCarIdx || 0,
-    position: telemetry.PlayerCarPosition || 0,
-    classPosition: telemetry.PlayerCarClassPosition || 0,
-    speed: telemetry.Speed || 0,
+    carIdx: getValue(telemetry.PlayerCarIdx),
+    position: getValue(telemetry.PlayerCarPosition),
+    classPosition: getValue(telemetry.PlayerCarClassPosition),
+    speed: getValue(telemetry.Speed),
 
     // Flags
-    sessionFlags: telemetry.SessionFlags || 0,
+    sessionFlags: getValue(telemetry.SessionFlags),
 
     // Track state
-    trackTemp: telemetry.TrackTemp || 0,
-    airTemp: telemetry.AirTemp || 0
+    trackTemp: getValue(telemetry.TrackTemp),
+    airTemp: getValue(telemetry.AirTemp)
   };
 
   // Broadcast telemetry
@@ -178,27 +271,29 @@ function processTelemetry(telemetry) {
   });
 
   // Initialize fuel level on first telemetry (BEFORE lap processing)
-  if (lastFuelLevel === 0 && telemetry.FuelLevel > 0) {
-    lastFuelLevel = telemetry.FuelLevel;
+  const currentFuel = getValue(telemetry.FuelLevel);
+  if (lastFuelLevel === 0 && currentFuel > 0) {
+    lastFuelLevel = currentFuel;
     console.log(`Initial fuel level: ${lastFuelLevel.toFixed(2)}L`);
   }
 
   // Process lap completion
-  if (telemetry.LapCompleted > lastLapNumber && lastLapNumber > 0) {
+  const currentLapCompleted = getValue(telemetry.LapCompleted);
+  if (currentLapCompleted > lastLapNumber && lastLapNumber > 0) {
     // Only process if we have a previous lap (skip lap 0 -> lap 1 transition)
-    const fuelUsed = lastFuelLevel - telemetry.FuelLevel;
+    const fuelUsed = lastFuelLevel - currentFuel;
 
     const lapData = {
-      lapNumber: telemetry.LapCompleted,
-      lapTime: telemetry.LapLastLapTime,
-      sessionTime: telemetry.SessionTime,
+      lapNumber: currentLapCompleted,
+      lapTime: getValue(telemetry.LapLastLapTime),
+      sessionTime: getValue(telemetry.SessionTime),
       fuelAtStart: lastFuelLevel,
-      fuelAtEnd: telemetry.FuelLevel,
+      fuelAtEnd: currentFuel,
       fuelUsed: fuelUsed > 0 ? fuelUsed : 0,
-      position: telemetry.PlayerCarPosition,
-      classPosition: telemetry.PlayerCarClassPosition,
-      isValid: !(telemetry.SessionFlags & 0x00000001),
-      isBestLap: telemetry.LapLastLapTime === telemetry.LapBestLapTime
+      position: getValue(telemetry.PlayerCarPosition),
+      classPosition: getValue(telemetry.PlayerCarClassPosition),
+      isValid: !(getValue(telemetry.SessionFlags) & 0x00000001),
+      isBestLap: getValue(telemetry.LapLastLapTime) === getValue(telemetry.LapBestLapTime)
     };
 
     laps.push(lapData);
@@ -211,9 +306,9 @@ function processTelemetry(telemetry) {
   }
 
   // Update trackers for next lap
-  if (telemetry.LapCompleted > lastLapNumber) {
-    lastLapNumber = telemetry.LapCompleted;
-    lastFuelLevel = telemetry.FuelLevel;
+  if (currentLapCompleted > lastLapNumber) {
+    lastLapNumber = currentLapCompleted;
+    lastFuelLevel = currentFuel;
   }
 
   // Process pit entry
@@ -259,8 +354,25 @@ function processTelemetry(telemetry) {
 // Main polling loop
 setInterval(() => {
   try {
-    const sessionData = sdk.getSessionData();
-    const telemetryData = sdk.getTelemetry();
+    // Try to start SDK if not already running (handles iRacing restart)
+    const sdkRunning = sdk.startSDK();
+
+    // Try to get data - this may return null if iRacing isn't running
+    let sessionData = null;
+    let telemetryData = null;
+
+    if (sdkRunning) {
+      try {
+        // Wait for fresh data (up to 100ms)
+        if (sdk.waitForData(0.1)) {
+          sessionData = sdk.getSessionData();
+          telemetryData = sdk.getTelemetryData();
+        }
+      } catch (sdkError) {
+        // SDK call failed - iRacing probably not running
+        // Silently continue to next iteration
+      }
+    }
 
     // Check connection status
     const wasConnected = isConnected;
@@ -298,7 +410,10 @@ setInterval(() => {
       processTelemetry(telemetryData);
     }
   } catch (error) {
-    // Silently handle errors (iRacing not running, etc.)
+    // Log errors for debugging
+    if (error.message && !error.message.includes('not connected')) {
+      console.error('SDK Error:', error.message);
+    }
   }
 }, TELEMETRY_UPDATE_INTERVAL);
 
