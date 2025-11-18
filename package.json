@@ -18,7 +18,7 @@
   "license": "ISC",
   "pkg": {
     "assets": [
-      "node_modules/node-irsdk/**/*"
+      "node_modules/@irsdk-node/**/*"
     ],
     "targets": [
       "node18-win-x64"
@@ -26,7 +26,7 @@
     "outputPath": "dist"
   },
   "dependencies": {
-    "node-irsdk": "^2.1.6",
+    "@irsdk-node/native": "^5.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

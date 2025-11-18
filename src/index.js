@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const WebSocket = require('ws');
-const irsdk = require('node-irsdk');
+const { NativeSDK } = require('@irsdk-node/native');
 
 console.log('========================================');
 console.log('Racing Intelligence Companion v1.0.0');
@@ -11,17 +11,13 @@ console.log('');
 // Configuration
 const WS_PORT = 8080;
 const TELEMETRY_UPDATE_INTERVAL = 100; // 100ms = 10 Hz
-const SESSION_INFO_UPDATE_INTERVAL = 1000; // 1 second
 
 // Initialize WebSocket server
 const wss = new WebSocket.Server({ port: WS_PORT });
 console.log(`WebSocket server running on port ${WS_PORT}`);
 
 // Initialize iRacing SDK
-const iracing = irsdk.init({
-  telemetryUpdateInterval: TELEMETRY_UPDATE_INTERVAL,
-  sessionInfoUpdateInterval: SESSION_INFO_UPDATE_INTERVAL
-});
+const sdk = new NativeSDK();
 
 // Track connected clients
 const clients = new Set();
@@ -93,55 +89,27 @@ function parseSessionTime(timeString) {
   return null;
 }
 
-// iRacing SDK Event Handlers
-iracing.on('Connected', () => {
-  console.log('✓ Connected to iRacing');
-  isConnected = true;
+// Process session data
+function processSessionData(sessionData) {
+  if (!sessionData) return;
 
-  broadcast({
-    type: 'iracing_connected',
-    data: { timestamp: new Date().toISOString() }
-  });
-});
-
-iracing.on('Disconnected', () => {
-  console.log('✗ Disconnected from iRacing');
-  isConnected = false;
-
-  // Reset session data
-  currentSession = null;
-  lastLapNumber = 0;
-  lastFuelLevel = 0;
-  pitStopCounter = 0;
-  isInPit = false;
-  pitEntryData = null;
-  laps.length = 0;
-  pitStops.length = 0;
-
-  broadcast({
-    type: 'iracing_disconnected',
-    data: { timestamp: new Date().toISOString() }
-  });
-});
-
-iracing.on('SessionInfo', (sessionInfo) => {
-  const weekendInfo = sessionInfo.data.WeekendInfo || {};
-  const sessionData = sessionInfo.data.SessionInfo?.Sessions?.[0] || {};
+  const weekendInfo = sessionData.WeekendInfo || {};
+  const sessionInfo = sessionData.SessionInfo?.Sessions?.[0] || {};
 
   const session = {
     sessionId: weekendInfo.SessionID || 0,
     subsessionId: weekendInfo.SubSessionID || null,
     trackName: weekendInfo.TrackDisplayName || weekendInfo.TrackName || 'Unknown',
     trackConfig: weekendInfo.TrackConfigName || null,
-    carName: sessionInfo.data.DriverInfo?.Drivers?.[0]?.CarScreenName || 'Unknown',
-    sessionType: sessionData.SessionType || 'Unknown',
-    sessionLaps: sessionData.SessionLaps === 'unlimited' ? null : parseInt(sessionData.SessionLaps) || null,
-    sessionTimeSeconds: parseSessionTime(sessionData.SessionTime),
-    isTimeLimited: sessionData.SessionTime !== 'unlimited',
-    sessionState: sessionData.SessionState || 'Unknown'
+    carName: sessionData.DriverInfo?.Drivers?.[0]?.CarScreenName || 'Unknown',
+    sessionType: sessionInfo.SessionType || 'Unknown',
+    sessionLaps: sessionInfo.SessionLaps === 'unlimited' ? null : parseInt(sessionInfo.SessionLaps) || null,
+    sessionTimeSeconds: parseSessionTime(sessionInfo.SessionTime),
+    isTimeLimited: sessionInfo.SessionTime !== 'unlimited',
+    sessionState: sessionInfo.SessionState || 'Unknown'
   };
 
-  if (!currentSession) {
+  if (!currentSession || currentSession.sessionId !== session.sessionId) {
     console.log(`New session: ${session.trackName} - ${session.carName}`);
     currentSession = session;
 
@@ -153,55 +121,54 @@ iracing.on('SessionInfo', (sessionInfo) => {
     pitEntryData = null;
     laps.length = 0;
     pitStops.length = 0;
+
+    broadcast({
+      type: 'session_info',
+      data: session
+    });
   }
+}
 
-  broadcast({
-    type: 'session_info',
-    data: session
-  });
-});
-
-iracing.on('Telemetry', (telemetry) => {
-  if (!currentSession || !isConnected) return;
-
-  const values = telemetry.values;
+// Process telemetry data
+function processTelemetry(telemetry) {
+  if (!currentSession || !isConnected || !telemetry) return;
 
   const telemetryData = {
     // Timing
-    sessionTime: values.SessionTime || 0,
-    sessionTimeRemain: values.SessionTimeRemain || 0,
+    sessionTime: telemetry.SessionTime || 0,
+    sessionTimeRemain: telemetry.SessionTimeRemain || 0,
 
     // Lap data
-    lap: values.Lap || 0,
-    lapCompleted: values.LapCompleted || 0,
-    lapDistPct: values.LapDistPct || 0,
+    lap: telemetry.Lap || 0,
+    lapCompleted: telemetry.LapCompleted || 0,
+    lapDistPct: telemetry.LapDistPct || 0,
 
     // Lap times
-    lapCurrentTime: values.LapCurrentLapTime || 0,
-    lapLastTime: values.LapLastLapTime || 0,
-    lapBestTime: values.LapBestLapTime || 0,
+    lapCurrentTime: telemetry.LapCurrentLapTime || 0,
+    lapLastTime: telemetry.LapLastLapTime || 0,
+    lapBestTime: telemetry.LapBestLapTime || 0,
 
     // Fuel
-    fuelLevel: values.FuelLevel || 0,
-    fuelLevelPct: values.FuelLevelPct || 0,
-    fuelUsePerHour: values.FuelUsePerHour || 0,
+    fuelLevel: telemetry.FuelLevel || 0,
+    fuelLevelPct: telemetry.FuelLevelPct || 0,
+    fuelUsePerHour: telemetry.FuelUsePerHour || 0,
 
     // Pit status
-    onPitRoad: values.OnPitRoad || false,
-    pitstopActive: values.PitstopActive || false,
+    onPitRoad: telemetry.OnPitRoad || false,
+    pitstopActive: telemetry.PitstopActive || false,
 
     // Position
-    carIdx: values.PlayerCarIdx || 0,
-    position: values.PlayerCarPosition || 0,
-    classPosition: values.PlayerCarClassPosition || 0,
-    speed: values.Speed || 0,
+    carIdx: telemetry.PlayerCarIdx || 0,
+    position: telemetry.PlayerCarPosition || 0,
+    classPosition: telemetry.PlayerCarClassPosition || 0,
+    speed: telemetry.Speed || 0,
 
     // Flags
-    sessionFlags: values.SessionFlags || 0,
+    sessionFlags: telemetry.SessionFlags || 0,
 
     // Track state
-    trackTemp: values.TrackTemp || 0,
-    airTemp: values.AirTemp || 0
+    trackTemp: telemetry.TrackTemp || 0,
+    airTemp: telemetry.AirTemp || 0
   };
 
   // Broadcast telemetry
@@ -211,27 +178,27 @@ iracing.on('Telemetry', (telemetry) => {
   });
 
   // Initialize fuel level on first telemetry (BEFORE lap processing)
-  if (lastFuelLevel === 0 && values.FuelLevel > 0) {
-    lastFuelLevel = values.FuelLevel;
+  if (lastFuelLevel === 0 && telemetry.FuelLevel > 0) {
+    lastFuelLevel = telemetry.FuelLevel;
     console.log(`Initial fuel level: ${lastFuelLevel.toFixed(2)}L`);
   }
 
   // Process lap completion
-  if (values.LapCompleted > lastLapNumber && lastLapNumber > 0) {
+  if (telemetry.LapCompleted > lastLapNumber && lastLapNumber > 0) {
     // Only process if we have a previous lap (skip lap 0 -> lap 1 transition)
-    const fuelUsed = lastFuelLevel - values.FuelLevel;
+    const fuelUsed = lastFuelLevel - telemetry.FuelLevel;
 
     const lapData = {
-      lapNumber: values.LapCompleted,
-      lapTime: values.LapLastLapTime,
-      sessionTime: values.SessionTime,
+      lapNumber: telemetry.LapCompleted,
+      lapTime: telemetry.LapLastLapTime,
+      sessionTime: telemetry.SessionTime,
       fuelAtStart: lastFuelLevel,
-      fuelAtEnd: values.FuelLevel,
+      fuelAtEnd: telemetry.FuelLevel,
       fuelUsed: fuelUsed > 0 ? fuelUsed : 0,
-      position: values.PlayerCarPosition,
-      classPosition: values.PlayerCarClassPosition,
-      isValid: !(values.SessionFlags & 0x00000001),
-      isBestLap: values.LapLastLapTime === values.LapBestLapTime
+      position: telemetry.PlayerCarPosition,
+      classPosition: telemetry.PlayerCarClassPosition,
+      isValid: !(telemetry.SessionFlags & 0x00000001),
+      isBestLap: telemetry.LapLastLapTime === telemetry.LapBestLapTime
     };
 
     laps.push(lapData);
@@ -244,9 +211,9 @@ iracing.on('Telemetry', (telemetry) => {
   }
 
   // Update trackers for next lap
-  if (values.LapCompleted > lastLapNumber) {
-    lastLapNumber = values.LapCompleted;
-    lastFuelLevel = values.FuelLevel;
+  if (telemetry.LapCompleted > lastLapNumber) {
+    lastLapNumber = telemetry.LapCompleted;
+    lastFuelLevel = telemetry.FuelLevel;
   }
 
   // Process pit entry
@@ -287,7 +254,53 @@ iracing.on('Telemetry', (telemetry) => {
     isInPit = false;
     pitEntryData = null;
   }
-});
+}
+
+// Main polling loop
+setInterval(() => {
+  try {
+    const sessionData = sdk.getSessionData();
+    const telemetryData = sdk.getTelemetryData();
+
+    // Check connection status
+    const wasConnected = isConnected;
+    isConnected = sessionData !== null && telemetryData !== null;
+
+    // Handle connection changes
+    if (isConnected && !wasConnected) {
+      console.log('✓ Connected to iRacing');
+      broadcast({
+        type: 'iracing_connected',
+        data: { timestamp: new Date().toISOString() }
+      });
+    } else if (!isConnected && wasConnected) {
+      console.log('✗ Disconnected from iRacing');
+
+      // Reset session data
+      currentSession = null;
+      lastLapNumber = 0;
+      lastFuelLevel = 0;
+      pitStopCounter = 0;
+      isInPit = false;
+      pitEntryData = null;
+      laps.length = 0;
+      pitStops.length = 0;
+
+      broadcast({
+        type: 'iracing_disconnected',
+        data: { timestamp: new Date().toISOString() }
+      });
+    }
+
+    // Process data if connected
+    if (isConnected) {
+      processSessionData(sessionData);
+      processTelemetry(telemetryData);
+    }
+  } catch (error) {
+    // Silently handle errors (iRacing not running, etc.)
+  }
+}, TELEMETRY_UPDATE_INTERVAL);
 
 console.log('Waiting for iRacing connection...');
 console.log('');
